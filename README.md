@@ -1,4 +1,4 @@
-# CLIP-Count: Towards Text-Guided Zero-Shot Object Counting
+sss# CLIP-Count: Towards Text-Guided Zero-Shot Object Counting
 ## [Paper (ArXiv)](https://arxiv.org/abs/2305.07304) | [Video](https://youtu.be/GzFc5j2Uufw)
 
 
