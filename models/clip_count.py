@@ -139,7 +139,7 @@ class CLIPCount(nn.Module):
         _, cls_token, x = self.img_encoder(x, text_embedding)
         return cls_token, x
 
-    def forward_decoder(self, img_feat_patches, text_embedding, cls_token):
+    def forward_decoder(self, img_feat_patches,text_embedding, gt_text_embedding, cls_token):
         """
 
         """
@@ -159,9 +159,17 @@ class CLIPCount(nn.Module):
         x = patch_embedding
         x = x + self.patch_emb_pos_embed # [B, 196, 512]
 
-        y_ = text_embedding # [B, 1, 512]
+
+        # text_prompt_mask_=torch.stack(text_prompt_mask, dim=1) # [B, 10]
+        # text_embedding_=torch.stack(text_embedding, dim=1) # [B, 10, 1, 512]
+        
+        # indices = torch.nonzero(text_prompt_mask_ == 1)[:, 1]
+        # gt_text_embedding = text_embedding_[torch.arange(text_embedding_.size(0)).unsqueeze(1), indices.unsqueeze(1)] # [B, 1, 1, 512]
+        # gt_text_embedding.squeeze_(1) # [B, 1, 512]
 
 
+        y_=gt_text_embedding # [B, 2, 512]
+        x=x_cls # [B, 1, 512]
         # apply Transformer blocks (cross-attention)
         if self.use_mixed_fim: 
             xs = []
@@ -185,19 +193,34 @@ class CLIPCount(nn.Module):
 
         return pred_density, extra_out
 
-    def forward(self, imgs, text, return_extra:bool = False, coop_require_grad:bool = False):
-
-        text_token = clip.tokenize(text).to(imgs.device)
-
-        if coop_require_grad:
-            text_embedding = self.text_encoder(text_token).float()
-        else:
-            with torch.no_grad():
-                text_embedding = self.text_encoder(text_token).float()
-
-        cls_token, img_feat_patches = self.forward_visual_encoder(imgs, text_embedding)
-        pred_density, extra_out = self.forward_decoder(img_feat_patches, text_embedding, cls_token)  # [N, 384, 384]
+    def forward(self, imgs, text,text_class, text_prompt_mask=None,return_extra:bool = False, coop_require_grad:bool = False):
+        # (B,3,384,384) (32)
         
+        if self.training:
+            pred_density, extra_out=self.train_forward(imgs, text, text_prompt_mask, coop_require_grad)
+        else:
+            pred_density, extra_out=self.test_forward(imgs, text_class,  coop_require_grad)
+        
+        # text_token=[] # [torch.size([B,77]]_10
+        # for t in text:
+        #     text_token.append(clip.tokenize(t).to(imgs.device))
+        
+
+        # text_embedding=[] # [torch.size([B,1,512]]_10
+        # if coop_require_grad:
+        #     for t in text_token:
+        #         text_embedding.append(self.text_encoder(t).float())
+        # else:
+        #     with torch.no_grad():
+        #         for t in text_token:
+        #             text_embedding.append(self.text_encoder(t).float())
+
+        # cls_token, img_feat_patches = self.forward_visual_encoder(imgs, text_embedding)
+        # # (32,1,512) (32,197,768)
+        # pred_density, extra_out = self.forward_decoder(img_feat_patches, text_embedding,text_prompt_mask, cls_token)  # [N, 384, 384]
+        # # (32,384,384) (5)['x_cls', 'text_embedding', 'patch_embedding', 'patch_embedding_contrast', 'pixel_text_matching_map']
+
+
         if return_extra:
             return pred_density, extra_out
         return pred_density
@@ -207,7 +230,100 @@ class CLIPCount(nn.Module):
         h = w = int(math.sqrt(hw))
         x = x.transpose(1, 2).reshape(n, c, h, w) 
         return x
+    def test_forward(self, imgs, text_class,  coop_require_grad):
+        
+        
+        text_prompt_interval=['zero','ten','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety','hundred','infinity']
+        text_interval_list=[]
 
+        for t in text_class:
+            for interval in text_prompt_interval:
+                text_interval_list.append('a photo of '+interval+' '+t)
+        text_token = clip.tokenize(text_interval_list).to(imgs.device)
+        if coop_require_grad:
+            text_embedding = self.text_encoder(text_token).float()
+        else:
+            with torch.no_grad():
+                text_embedding = self.text_encoder(text_token).float()
+                
+        text_embedding=text_embedding.reshape(len(text_class),len(text_prompt_interval),text_embedding.shape[-2],text_embedding.shape[-1]) # [B, 12, 1, 512]
+        text_embedding=text_embedding.squeeze(2) # [B, 12, 512]
+
+        cls_token, img_feat_patches = self.forward_visual_encoder(imgs, text_embedding)
+        sim_map = F.cosine_similarity(cls_token, text_embedding , dim=-1) # (B, 10)
+        top_values, top_indices = torch.topk(sim_map, k=2, dim=1)
+        pred_text_embedding = text_embedding[torch.arange(text_embedding.size(0)).unsqueeze(1), top_indices]
+      
+      
+        # text=np.repeat(text_interval_list, imgs.shape[0], axis=0)
+        
+        
+        # text_token = clip.tokenize(text).to(imgs.device)
+
+        # if coop_require_grad:
+        #     text_embedding = self.text_encoder(text_token).float()
+        # else:
+        #     with torch.no_grad():
+        #         text_embedding = self.text_encoder(text_token).float()
+
+        # cls_token, img_feat_patches = self.forward_visual_encoder(imgs, text_embedding)
+        # pred_density, extra_out = self.forward_decoder(img_feat_patches, text_embedding, cls_token)  # [N, 384, 384]
+        # return pred_density, extra_out
+        
+
+        
+        
+        
+        pred_density, extra_out = self.forward_decoder(img_feat_patches, text_embedding,pred_text_embedding, cls_token)  # [N, 384, 384]
+        # (32,384,384) (5)['x_cls', 'text_embedding', 'patch_embedding', 'patch_embedding_contrast', 'pixel_text_matching_map']
+        return pred_density, extra_out
+        
+        
+    def train_forward(self, imgs, text, text_prompt_mask, coop_require_grad):
+
+        text_token=[] # [torch.size([B,77]]_10
+        for t in text:
+            text_token.append(clip.tokenize(t).to(imgs.device))
+        
+
+        text_embedding=[] # [torch.size([B,1,512]]_10
+        if coop_require_grad:
+            for t in text_token:
+                text_embedding.append(self.text_encoder(t).float())
+        else:
+            with torch.no_grad():
+                for t in text_token:
+                    text_embedding.append(self.text_encoder(t).float())
+
+ 
+
+        cls_token, img_feat_patches = self.forward_visual_encoder(imgs, text_embedding)
+        # (32,1,512) (32,197,768)
+        
+        
+        text_prompt_mask_=torch.stack(text_prompt_mask, dim=1) # [B, 10]
+        text_embedding_=torch.stack(text_embedding, dim=1) # [B, 10, 1, 512]
+        # 每张图片选一个gt_text_embedding
+        # indices = torch.nonzero(text_prompt_mask_ == 1)[:, 1]
+        # gt_text_embedding = text_embedding_[torch.arange(text_embedding_.size(0)).unsqueeze(1), indices.unsqueeze(1)] # [B, 1, 1, 512]
+        
+        # 每张图片选两个gt_text_embedding
+        indices = torch.nonzero(text_prompt_mask_ == 1)[:, 1:]        
+        # gt_text_embedding = text_embedding_[torch.arange(text_embedding_.size(0)).unsqueeze(1), indices.unsqueeze(1)] # [B, 2, 1, 512]
+        # gt_text_embedding.squeeze_(1) # [B, 1, 512]
+        gt_text_embedding=[]
+        for i in  range(text_embedding_.shape[0]):
+            gt_text_embedding.append(text_embedding_[i,indices[2*i],:,:])
+            gt_text_embedding.append(text_embedding_[i,indices[2*i+1],:,:])
+        gt_text_embedding=torch.stack(gt_text_embedding, dim=0) # [B*2, 1,1, 512]
+        gt_text_embedding=gt_text_embedding.reshape(gt_text_embedding.shape[0]//2,2,1,gt_text_embedding.shape[-1]) # [B, 2, 1, 512]
+        gt_text_embedding.squeeze_(2) # [B, 2, 512]
+        
+        
+        pred_density, extra_out = self.forward_decoder(img_feat_patches, text_embedding,gt_text_embedding, cls_token)  # [N, 384, 384]
+        # (32,384,384) (5)['x_cls', 'text_embedding', 'patch_embedding', 'patch_embedding_contrast', 'pixel_text_matching_map']
+        return pred_density, extra_out
+        
 class CLIPViT(nn.Module):
     """
     ViT encoder for CLIP
@@ -294,6 +410,7 @@ class CLIPViT(nn.Module):
         x_cls = x[:, :1, :]  # [CLS] token
         x_cls = self.vit.ln_post(x_cls)
         x_cls = x_cls @ self.vit.proj
+        # [16, 196, 768] [16, 1, 512] [16, 197, 768]
         return img_patches, x_cls, x
     
 

@@ -149,10 +149,11 @@ class Model(LightningModule):
 
     def training_step(self, batch, batch_idx):
 
-        samples, gt_density, boxes, m_flag, prompt_gt, prompt_add = batch
+        samples, gt_density, boxes, m_flag, prompt_gt,text_class, prompt_add,image_id,text_prompt_mask = batch
+        # prompt_gt=np.array(prompt_gt).T # (B, 10)
+        # text_prompt_mask=torch.stack(text_prompt_mask, dim=1) # [B, 10]
 
-
-        output, extra_out = self.model(samples, prompt_gt, return_extra=True, coop_require_grad =  True)
+        output, extra_out = self.model(samples, prompt_gt,text_class,text_prompt_mask, return_extra=True, coop_require_grad =  True)
 
         if not self.args.use_contrast:
             prompt_gt = [f"a photo of {p}" for p in prompt_gt]
@@ -171,7 +172,7 @@ class Model(LightningModule):
             elif self.args.contrast_pos == "post":
                 patch_embedding = extra_out['pixel_text_matching_map']
             img_embedding = extra_out['x_cls'] # [B, 1, 512]
-            contrast_loss = self.contrastive_loss(patch_embedding, img_embedding, text_embedding, self.neg_prompt_embed,  gt_density.detach().clone())
+            contrast_loss = self.contrastive_loss(patch_embedding, img_embedding, text_embedding,text_prompt_mask, self.neg_prompt_embed,  gt_density.detach().clone())
             loss = args.w_contrast * contrast_loss
             self.log('train_loss_contrast', contrast_loss)
 
@@ -202,11 +203,11 @@ class Model(LightningModule):
         return loss
     
     def validation_step(self, batch, batch_idx):
-        samples, gt_density, _, _, prompt, _ = batch
+        samples, gt_density, _, _, prompt,text_class, _ ,image_id,text_prompt_mask= batch
         if not self.args.use_contrast:
             prompt = [f"a photo of {p}" for p in prompt]
 
-        output = self.model(samples, prompt)
+        output = self.model(samples,prompt, text_class)
 
         
         # Update information of MAE and RMSE
@@ -270,7 +271,7 @@ class Model(LightningModule):
         self.logger.experiment.add_image("density_gt", gt, self.current_epoch)
         self.logger.experiment.add_image("overlay_pred", heatmap_pred, self.current_epoch)
         self.logger.experiment.add_image("overlay_gt", heatmap_gt, self.current_epoch)
-        self.logger.experiment.add_text("prompt", prompt, self.current_epoch)
+        self.logger.experiment.add_text("prompt", str(prompt), self.current_epoch)
         self.logger.experiment.add_text("count", pred_gt, self.current_epoch)
     
     def test_step(self, batch, batch_idx):

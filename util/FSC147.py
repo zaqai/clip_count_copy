@@ -92,6 +92,26 @@ class FSC147(Dataset):
         im_id = self.idx_running_set[idx]
         anno = self.annotations[im_id]
         text = self.class_dict[im_id]
+        text_class = self.class_dict[im_id]
+        text_prompt_interval=['zero','ten','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety','hundred','infinity']
+        text_interval_list=[]
+        text_prompt_mask=[0,0,0,0,0,0,0,0,0,0,0,0]
+        text_GT_count=len(self.annotations[im_id]['points'])
+        if text_GT_count<=10:
+            text_prompt_mask[0]=1
+            text_prompt_mask[1]=1
+            
+        elif text_GT_count>=100:
+            text_prompt_mask[-1]=1
+            text_prompt_mask[-2]=1
+        else:
+            text_prompt_mask[text_GT_count//10]=1
+            text_prompt_mask[text_GT_count//10-1]=1
+            
+            
+        for interval in text_prompt_interval:
+            text_interval_list.append('a photo of '+interval+' '+text)
+        text=text_interval_list
         if self.use_additional_prompt:
             additional_prompt = self.additional_prompt[im_id]
         bboxes = anno['box_examples_coordinates']
@@ -116,8 +136,9 @@ class FSC147(Dataset):
 
             sample = self.transform(sample)
             if self.use_additional_prompt:
-                return sample['image'].float(), sample['gt_density'], sample['boxes'], sample['m_flag'], text, additional_prompt 
-            return sample['image'].float(), sample['gt_density'], sample['boxes'], sample['m_flag'], text
+                # 默认总为真，如果有假要考虑第二个return语句和batch赋值对应
+                return sample['image'].float(), sample['gt_density'], sample['boxes'], sample['m_flag'], text,text_class, additional_prompt , im_id,text_prompt_mask
+            return sample['image'].float(), sample['gt_density'], sample['boxes'], sample['m_flag'], text,text_prompt_mask
         elif self.split == "test" or self.split == "test_coco" or self.split == "val_coco" or (self.split == "val" and not self.resize_val):
             dots = np.array(anno['points'])
             image = Image.open('{}/{}'.format(self.im_dir, im_id))

@@ -31,3 +31,5 @@ ShanghaiTech/
 .vscode/
 __MACOSX/
 
+pretrained/
+.git_commited/

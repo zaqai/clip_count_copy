@@ -13,6 +13,8 @@ from PIL import Image
 from torch.utils.data import Dataset
 import os
 import scipy as sp
+import scipy.misc 
+from scipy import io
 import glob as gb
 IM_NORM_MEAN = [0.485, 0.456, 0.406]
 IM_NORM_STD = [0.229, 0.224, 0.225]
@@ -52,7 +54,7 @@ class ShanghaiTech(Dataset):
             assert os.path.exists(os.path.join(self.im_dir, f"{im_name}.jpg"))
             assert os.path.exists(os.path.join(self.anno_path, f"GT_{im_name}.mat"))
             with open(os.path.join(self.anno_path, f"GT_{im_name}.mat"), "rb") as f:
-                mat = sp.io.loadmat(f)
+                mat = io.loadmat(f)
                 # the number of count is lenth of the points
                 self.gt_cnt[im_name] = len(mat["image_info"][0][0][0][0][0])      
         # resize the image height to 384, keep the aspect ratio
